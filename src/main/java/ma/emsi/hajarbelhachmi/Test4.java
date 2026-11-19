@@ -14,11 +14,13 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel;
 import dev.langchain4j.model.google.genai.GoogleGenAiChatModel;
+import dev.langchain4j.model.input.PromptTemplate;
 import dev.langchain4j.rag.DefaultRetrievalAugmentor;
 import dev.langchain4j.rag.RetrievalAugmentor;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.rag.content.retriever.WebSearchContentRetriever;
+import dev.langchain4j.rag.query.Query;
 import dev.langchain4j.rag.query.router.DefaultQueryRouter;
 import dev.langchain4j.rag.query.router.QueryRouter;
 import dev.langchain4j.service.AiServices;
@@ -27,11 +29,14 @@ import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 import dev.langchain4j.web.search.WebSearchEngine;
 import dev.langchain4j.web.search.tavily.TavilyWebSearchEngine;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
 
 /**
  * Test 5 : RAG avec récupération sur le Web (Tavily) en plus du PDF.
+ * Bonus : le PDF n'est pas utilisé si la question ne porte pas sur son contenu.
  */
 public class Test4 {
 
@@ -74,8 +79,46 @@ public class Test4 {
                 .webSearchEngine(webSearchEngine)
                 .build();
 
-        // Les 2 ContentRetrievers sont toujours utilisés
-        QueryRouter queryRouter = new DefaultQueryRouter(contentRetrieverPdf, contentRetrieverWeb);
+        // ===== CODE INITIAL (mis en commentaire pour le correcteur) =====
+        // Problème : le DefaultQueryRouter envoie TOUJOURS la question aux 2 retrievers,
+        // donc des extraits du PDF sont ajoutés même si la question n'a aucun rapport.
+        // QueryRouter queryRouter = new DefaultQueryRouter(contentRetrieverPdf, contentRetrieverWeb);
+
+        // ===== CODE CORRIGÉ =====
+        // Modèle dédié au routage : température 0 pour une réponse stable
+        ChatModel modelRouteur = GoogleGenAiChatModel.builder()
+                .apiKey(llmKey)
+                .modelName("gemini-3.5-flash")
+                .temperature(0.0)
+                .logRequestsAndResponses(true)
+                .build();
+
+        // Classe interne locale : après la définition de modelRouteur, contentRetrieverPdf et contentRetrieverWeb
+        class QueryRouterPdfOuWeb implements QueryRouter {
+
+            private final PromptTemplate promptTemplate = PromptTemplate.from(
+                    "Est-ce que la requête '{{requete}}' porte sur l'IA, et plus précisément sur le 'RAG' "
+                            + "(Retrieval Augmented Generation) ou le 'Fine Tuning' ? "
+                            + "Réponds 'oui' seulement si la requête porte sur l'IA, le RAG ou le Fine Tuning. "
+                            + "Réponds 'non' si elle porte sur un autre sujet (sport, actualité, météo, culture générale...). "
+                            + "Réponds 'peut-être' si tu hésites. "
+                            + "Réponds uniquement par 'oui', 'non' ou 'peut-être'.");
+
+            @Override
+            public List<ContentRetriever> route(Query query) {
+                String question = promptTemplate.apply(Map.of("requete", query.text())).text();
+                String reponse = modelRouteur.chat(question).trim().toLowerCase();
+                if (reponse.startsWith("non")) {
+                    // Sans rapport avec le PDF : on ne consulte que le Web
+                    return Collections.singletonList(contentRetrieverWeb);
+                } else {
+                    // Lié au cours (ou doute) : PDF + Web
+                    return List.of(contentRetrieverPdf, contentRetrieverWeb);
+                }
+            }
+        }
+
+        QueryRouter queryRouter = new QueryRouterPdfOuWeb();
 
         RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
                 .queryRouter(queryRouter)
@@ -92,6 +135,7 @@ public class Test4 {
         conversationAvec(assistant);
     }
 
+    /** Phase 1 : charge un fichier du classpath, le découpe, calcule les embeddings et les enregistre. */
     private static EmbeddingStore<TextSegment> ingerer(String nomFichier, EmbeddingModel embeddingModel) {
         DocumentParser documentParser = new ApacheTikaDocumentParser();
         Document document = ClassPathDocumentLoader.loadDocument(nomFichier, documentParser);
