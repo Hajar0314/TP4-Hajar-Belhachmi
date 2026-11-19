@@ -1,3 +1,4 @@
+
 package ma.emsi.hajarbelhachmi;
 
 import dev.langchain4j.data.document.Document;
@@ -30,6 +31,7 @@ public class RagNaif {
 
     public static void main(String[] args) {
         String llmKey = System.getenv("GEMINI_KEY");
+
         if (llmKey == null) {
             System.out.println("La variable d'environnement GEMINI_KEY n'est pas définie.");
             return;
@@ -40,7 +42,7 @@ public class RagNaif {
                 .apiKey(llmKey)
                 .modelName("gemini-3.5-flash")
                 .temperature(0.3)
-                // .logRequestsAndResponses(true)   // <-- à décommenter pour l'étape "avec logging"
+                .logRequestsAndResponses(true)
                 .build();
 
         // ===== Phase 1 : enregistrement des embeddings =====
@@ -56,7 +58,7 @@ public class RagNaif {
         // 3. Modèle d'embeddings
         EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
 
-        // 4. Embeddings des segments (embedAll retourne une Response<List<Embedding>>)
+        // 4. Embeddings des segments
         List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
 
         // 5. Enregistrement dans le magasin d'embeddings en mémoire
@@ -92,15 +94,21 @@ public class RagNaif {
             while (true) {
                 System.out.println("==================================================");
                 System.out.println("Posez votre question : ");
+
                 String question = scanner.nextLine();
+
                 if (question.isBlank()) {
                     continue;
                 }
+
                 System.out.println("==================================================");
+
                 if ("fin".equalsIgnoreCase(question)) {
                     break;
                 }
+
                 String reponse = assistant.chat(question);
+
                 System.out.println("Assistant : " + reponse);
                 System.out.println("==================================================");
             }
